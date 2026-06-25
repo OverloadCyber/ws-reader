@@ -1,6 +1,6 @@
-<#
+﻿<#
 .SYNOPSIS
-    Leitor de WebSocket (ws:// / wss://) para PowerShell — Delfia.
+    Leitor de WebSocket (ws:// / wss://) para PowerShell - Delfia.
 .DESCRIPTION
     Conecta a uma URL WebSocket e imprime as mensagens recebidas em tempo real.
     Permite enviar mensagens digitando no terminal. Use Ctrl+C para sair.
@@ -78,7 +78,10 @@ function Show-SIOMessage {
             try {
                 $arr  = $payload | ConvertFrom-Json
                 $name = $arr[0]
-                $data = if ($arr.Count -gt 1) { ($arr[1..($arr.Count - 1)] | ConvertTo-Json -Depth 20 -Compress) } else { '' }
+                $data = ''
+                if ($arr.Count -gt 1) {
+                    $data = ($arr[1..($arr.Count - 1)] | ConvertTo-Json -Depth 20 -Compress)
+                }
                 Write-Line "< EVT" ("{0}  {1}" -f $name, $data) Green
             } catch {
                 Write-Line "< EVT" $payload Green
@@ -97,10 +100,13 @@ function Show-SocketIO {
     $type = $Text[0]
     switch ($type) {
         '0' {
-            # Engine.IO OPEN — handshake
+            # Engine.IO OPEN - handshake
             Write-Line "< OPEN" (Format-MaybeJson $Text.Substring(1)) DarkCyan
             # Entra no namespace p/ comecar a receber eventos
-            $connect = if ($script:Namespace -and $script:Namespace -ne '/') { '40' + $script:Namespace + ',' } else { '40' }
+            $connect = '40'
+            if ($script:Namespace -and $script:Namespace -ne '/') {
+                $connect = '40' + $script:Namespace + ','
+            }
             Send-WsText $connect
             Write-Line "> SIO" "connect ($connect)" Cyan
         }
@@ -214,7 +220,7 @@ try {
             # Auto-deteccao: frame de OPEN do Engine.IO (0{"sid":...}) liga o modo Socket.IO
             if (-not $sioMode -and -not $Raw -and $text -match '^0\{.*"sid"') {
                 $sioMode = $true
-                Write-Line "SYS" "Socket.IO/Engine.IO detectado — modo protocolo ativo." Yellow
+                Write-Line "SYS" "Socket.IO/Engine.IO detectado - modo protocolo ativo." Yellow
             }
 
             if ($sioMode -and -not $Raw) {
@@ -227,7 +233,7 @@ try {
     }
 }
 catch [OperationCanceledException] {
-    # Ctrl+C / cancelamento — saida limpa
+    # Ctrl+C / cancelamento - saida limpa
 }
 catch {
     Write-Line "ERRO" $_.Exception.Message Red
