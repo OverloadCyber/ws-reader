@@ -61,7 +61,9 @@
   .msg.err .tag{color:var(--red)}
   .msg .body{flex:1}
   .sendbar{display:flex; gap:8px; padding:12px 18px; border-top:1px solid var(--line)}
-  .meta{padding:6px 18px; color:var(--dim); font-size:11px; border-bottom:1px solid var(--line)}
+  .meta{padding:6px 18px; color:var(--dim); font-size:11px; border-bottom:1px solid var(--line); line-height:1.5}
+  .meta b{color:var(--txt); font-weight:700}
+  .meta code{color:var(--green); background:#000; padding:1px 5px; border-radius:4px}
   a{color:var(--green)}
 </style>
 </head>
@@ -77,6 +79,17 @@
     <button id="connect">Conectar</button>
     <button id="disconnect" class="ghost" disabled>Desconectar</button>
     <button id="clear" class="ghost">Limpar</button>
+  </div>
+
+  <div class="bar">
+    <input id="onconnect" type="text" spellcheck="false"
+           placeholder='mensagens ao conectar — replica as inscrições do navegador (uma por linha ou separadas por ; ). Ex: 42["subscribe","sala-x"]'>
+  </div>
+
+  <div class="meta">
+    Auth por <b>Cookie</b>/<b>Authorization</b> não pode ser setada pela API WebSocket do navegador.
+    Cookies só vão se a página for do mesmo domínio do WS; para token use <code>?token=…</code> na URL ou o subprotocolo.
+    Para enviar headers de request arbitrários use o <code>ws-reader.ps1</code> (parâmetro <code>-Header</code>).
   </div>
 
   <div class="status">
@@ -131,6 +144,7 @@ function setConnected(on){
   $('#disconnect').disabled = !on;
   $('#url').disabled = on;
   $('#proto').disabled = on;
+  $('#onconnect').disabled = on;
   $('#send').disabled = !on;
   $('#sendBtn').disabled = !on;
 }
@@ -156,7 +170,17 @@ function connect(){
 
   ws.binaryType = 'arraybuffer';
 
-  ws.onopen = () => { setStatus('on','conectado'); add('sys','SYS','Conexão aberta'); };
+  ws.onopen = () => {
+    setStatus('on','conectado'); add('sys','SYS','Conexão aberta');
+    // Replica as inscrições que o navegador faz logo após abrir
+    const onconn = $('#onconnect').value.trim();
+    if(onconn){
+      onconn.split(/[\n;]+/).map(s=>s.trim()).filter(Boolean).forEach(m => {
+        ws.send(m);
+        add('out','► SUB', m);
+      });
+    }
+  };
 
   ws.onmessage = (ev) => {
     count++;
