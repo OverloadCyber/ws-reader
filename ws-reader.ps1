@@ -16,6 +16,11 @@
     quando o servidor envia o frame de OPEN (0{"sid":...}).
 .PARAMETER Namespace
     Namespace do Socket.IO (padrao "/"). Ex: -Namespace "/admin".
+.PARAMETER OnConnect
+    Mensagem(ns) a enviar automaticamente assim que conectar (replica as inscricoes
+    que o navegador faz). Em Socket.IO sao enviadas apos o servidor confirmar o
+    namespace; em modo cru, logo apos abrir. Pode repetir.
+    Ex: -OnConnect '42["subscribe","sala-x"]'
 .PARAMETER Raw
     Desliga o modo Socket.IO e mostra os frames crus, mesmo que sejam detectados.
 .EXAMPLE
@@ -34,6 +39,7 @@ param(
     [string]$SubProtocol,
     [switch]$SocketIO,
     [string]$Namespace = '/',
+    [string[]]$OnConnect,
     [switch]$Raw
 )
 
@@ -61,6 +67,17 @@ function Send-WsText {
     $script:ws.SendAsync($out, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $script:cts.Token).GetAwaiter().GetResult()
 }
 
+# Envia as mensagens de -OnConnect (uma unica vez)
+function Send-OnConnect {
+    if ($script:onConnectSent) { return }
+    if (-not $script:OnConnect)  { return }
+    $script:onConnectSent = $true
+    foreach ($m in $script:OnConnect) {
+        Send-WsText $m
+        Write-Line "> SUB" $m Cyan
+    }
+}
+
 # Decodifica o payload de um pacote Socket.IO (o que vem depois do '4' do Engine.IO)
 function Show-SIOMessage {
     param([string]$Sio)
@@ -68,7 +85,7 @@ function Show-SIOMessage {
     $t    = $Sio[0]
     $rest = $Sio.Substring(1)
     switch ($t) {
-        '0' { Write-Line "< CONN" "namespace conectado $rest" Green }
+        '0' { Write-Line "< CONN" "namespace conectado $rest" Green; Send-OnConnect }
         '1' { Write-Line "< DISC" "namespace desconectado $rest" Yellow }
         '2' {
             # EVENT: [/namespace,][ackId]["nome", arg1, arg2, ...]
@@ -176,6 +193,11 @@ $buffer  = [byte[]]::new(8192)
 $segment = [System.ArraySegment[byte]]::new($buffer)
 $count   = 0
 $sioMode = [bool]$SocketIO   # pode ser ligado por auto-deteccao ao ver o frame de OPEN
+$onConnectSent = $false
+
+# Modo cru: nao ha handshake de namespace, entao envia o OnConnect logo apos abrir.
+# (No modo Socket.IO o envio ocorre apos o "< CONN" do servidor.)
+if ($Raw) { Send-OnConnect }
 
 try {
     while ($ws.State -eq 'Open') {
