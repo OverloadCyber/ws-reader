@@ -48,3 +48,13 @@ Em vez de caçar o frame no DevTools, deixe um proxy interceptar o navegador:
 5. Acesse o site — o terminal mostra requests/responses HTTP (com corpo JSON) e os
    frames WebSocket com Socket.IO decodificado (CONNECT/EVENT/ACK). Dali você copia o
    auth e os dados para usar no `ws-reader.ps1`.
+
+### Deixar o Claude Code analisar a captura
+
+Grave tudo num arquivo com `--set capfile=captura.log`:
+```powershell
+mitmdump --listen-port 8881 --allow-hosts "cx\.netscout\.com" --set termlog_verbosity=warn --set capfile=captura.log -s mitm-ws-log.py
+```
+Depois rode o Claude Code (CLI) na mesma pasta e peça, por exemplo:
+"analise o captura.log e me diga qual é o payload de auth do socket.io e o que cada
+evento significa". Ele lê o arquivo direto — não precisa de API nem de chave.

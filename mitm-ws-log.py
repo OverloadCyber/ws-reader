@@ -17,6 +17,10 @@ terminal e so a saida deste addon (que usa print, entao sempre aparece).
 
 Filtro extra opcional dentro do addon (caso nao use --allow-hosts):
     --set caphost=cx.netscout.com
+
+Gravar a captura num arquivo (p/ depois o Claude Code analisar):
+    --set capfile=captura.log
+Depois rode o Claude Code na pasta e peca: "analise captura.log".
 """
 
 MAX_BODY = 4000  # corta corpos gigantes p/ nao inundar o terminal
@@ -76,16 +80,38 @@ def _decode_socketio(text):
 class Capture:
     def __init__(self):
         self.host = None
+        self.outfile = None
+        self._fh = None
 
     def load(self, loader):
         loader.add_option(
             "caphost", str, "",
             "Filtra a saida do addon: so loga flows cujo host contenha esse texto.",
         )
+        loader.add_option(
+            "capfile", str, "",
+            "Se setado, grava toda a captura nesse arquivo (p/ o Claude Code ler).",
+        )
 
     def configure(self, updated):
         from mitmproxy import ctx
         self.host = ctx.options.caphost or None
+        self.outfile = ctx.options.capfile or None
+        if self.outfile and self._fh is None:
+            # append (a) p/ nao perder captura entre execucoes
+            self._fh = open(self.outfile, "a", encoding="utf-8")
+
+    def done(self):
+        if self._fh:
+            self._fh.close()
+            self._fh = None
+
+    def _out(self, line):
+        # imprime no terminal e, se houver arquivo, grava nele tambem
+        print(line)
+        if self._fh:
+            self._fh.write(line + "\n")
+            self._fh.flush()
 
     def _match(self, flow):
         return not self.host or self.host in flow.request.pretty_host
@@ -95,41 +121,41 @@ class Capture:
         if not self._match(flow):
             return
         r = flow.request
-        print("\n" + "-" * 72)
-        print("REQ  %s %s" % (r.method, r.pretty_url))
+        self._out("\n" + "-" * 72)
+        self._out("REQ  %s %s" % (r.method, r.pretty_url))
         # primeiro os headers importantes, depois os demais
         seen = set()
         for h in KEY_REQ:
             if h in r.headers:
-                print("   > %s: %s" % (h, r.headers[h]))
+                self._out("   > %s: %s" % (h, r.headers[h]))
                 seen.add(h)
         for k, v in r.headers.items():
             if k.lower() not in seen:
-                print("   > %s: %s" % (k, v))
+                self._out("   > %s: %s" % (k, v))
         body = _body(r)
         if body:
-            print("   REQ BODY: %s" % body)
+            self._out("   REQ BODY: %s" % body)
 
     def response(self, flow):
         if not self._match(flow):
             return
         resp = flow.response
         ct = resp.headers.get("content-type", "")
-        print("RESP %s  %s  (%s)" % (resp.status_code, flow.request.pretty_url, ct))
+        self._out("RESP %s  %s  (%s)" % (resp.status_code, flow.request.pretty_url, ct))
         body = _body(resp)
         if body:
-            print("   RESP BODY: %s" % body)
+            self._out("   RESP BODY: %s" % body)
 
     # ---------- WebSocket ----------
     def websocket_start(self, flow):
         if not self._match(flow):
             return
-        print("\n" + "=" * 72)
-        print("WS ABRIU  %s" % flow.request.pretty_url)
+        self._out("\n" + "=" * 72)
+        self._out("WS ABRIU  %s" % flow.request.pretty_url)
         for h in ("cookie", "origin", "authorization"):
             if h in flow.request.headers:
-                print("   %s: %s" % (h, flow.request.headers[h]))
-        print("=" * 72)
+                self._out("   %s: %s" % (h, flow.request.headers[h]))
+        self._out("=" * 72)
 
     def websocket_message(self, flow):
         if not self._match(flow):
@@ -140,14 +166,14 @@ class Capture:
         except Exception:
             text = repr(m.content)
         arrow = "ENVIA  >>" if m.from_client else "<< RECEBE"
-        print("%s  %s" % (arrow, text))
+        self._out("%s  %s" % (arrow, text))
         decoded = _decode_socketio(text)
         if decoded and decoded != text:
-            print("            -> %s" % decoded)
+            self._out("            -> %s" % decoded)
 
     def websocket_end(self, flow):
         if self._match(flow):
-            print("WS FECHOU  %s" % flow.request.pretty_url)
+            self._out("WS FECHOU  %s" % flow.request.pretty_url)
 
 
 addons = [Capture()]
