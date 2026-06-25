@@ -7,7 +7,8 @@
 .PARAMETER Url
     A URL do WebSocket (ex: wss://echo.websocket.org). Se omitida, será solicitada.
 .PARAMETER Header
-    Header(s) HTTP no handshake, formato "Nome: valor". Pode repetir. Ex: -Header "Authorization: Bearer xyz"
+    Header(s) HTTP no handshake, formato "Nome: valor". Para varios, separe por
+    virgula (NAO repita -Header): -Header "Cookie: a=1", "Origin: https://x.com"
 .PARAMETER SubProtocol
     Subprotocolo opcional.
 .PARAMETER SocketIO
@@ -23,8 +24,8 @@
 .PARAMETER OnConnect
     Mensagem(ns) a enviar automaticamente assim que conectar (replica as inscricoes
     que o navegador faz). Em Socket.IO sao enviadas apos o servidor confirmar o
-    namespace; em modo cru, logo apos abrir. Pode repetir.
-    Ex: -OnConnect '42["subscribe","sala-x"]'
+    namespace; em modo cru, logo apos abrir. Para varias, separe por virgula
+    (NAO repita -OnConnect): -OnConnect '42["a"]', '42["b"]'
 .PARAMETER Raw
     Desliga o modo Socket.IO e mostra os frames crus, mesmo que sejam detectados.
 .EXAMPLE
