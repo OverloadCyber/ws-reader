@@ -4,9 +4,9 @@ Leitor de WebSocket dinamico (ws:// / wss://) - Delfia.
 
 - `ws-reader.html` - cliente para navegador (sem dependencias)
 - `ws-reader.ps1` - cliente para PowerShell 5.1+ / 7+
-- `mitm-ws-log.py` - addon do mitmproxy p/ capturar TODO o WebSocket do navegador
-  (handshake + frames, com Socket.IO decodificado). Use quando nao souber qual
-  cookie/auth/inscricao o navegador manda - o proxy mostra tudo automaticamente.
+- `mitm-ws-log.py` - addon do mitmproxy p/ capturar HTTP + WebSocket do navegador
+  (requests/responses com corpo JSON, handshake e frames com Socket.IO decodificado).
+  Use quando nao souber qual cookie/auth/inscricao o navegador manda - mostra tudo.
 
 ## PowerShell
 ```powershell
@@ -33,12 +33,18 @@ Pegue a conexão no DevTools (Network → WS) e replique o handshake:
 Em vez de caçar o frame no DevTools, deixe um proxy interceptar o navegador:
 
 1. Instale o mitmproxy (https://mitmproxy.org/downloads ou `pip install mitmproxy`).
-2. Rode o proxy com o addon na porta 8881:
+2. Rode o proxy só p/ o host de interesse (sem ruído de outros sites):
    ```powershell
-   mitmdump --listen-port 8881 -s mitm-ws-log.py --set wshost=cx.netscout.com
+   mitmdump --listen-port 8881 --allow-hosts "cx\.netscout\.com" --set termlog_verbosity=warn -s mitm-ws-log.py
    ```
+   - `--allow-hosts` faz interceptar APENAS esse host; o resto passa direto.
+   - `--set termlog_verbosity=warn` silencia as linhas de connect/disconnect do mitmproxy.
 3. Aponte o navegador (ou o Windows) para o proxy `127.0.0.1:8881`.
-4. Abra `http://mitm.it` no navegador e instale o certificado (necessário p/ `wss://`).
-5. Acesse o site normalmente — o terminal mostra o handshake (Cookie/Origin) e cada
-   frame, com Socket.IO decodificado (CONNECT/EVENT/ACK). Dali você copia o auth e os
-   eventos para usar no `ws-reader.ps1`.
+4. Instale o certificado do mitmproxy (necessário p/ `https`/`wss`):
+   ```powershell
+   certutil -addstore -f "ROOT" "$env:USERPROFILE\.mitmproxy\mitmproxy-ca-cert.cer"
+   ```
+   (ou abra `http://mitm.it` no navegador e instale manualmente). Reabra o navegador.
+5. Acesse o site — o terminal mostra requests/responses HTTP (com corpo JSON) e os
+   frames WebSocket com Socket.IO decodificado (CONNECT/EVENT/ACK). Dali você copia o
+   auth e os dados para usar no `ws-reader.ps1`.

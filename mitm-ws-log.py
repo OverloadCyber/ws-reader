@@ -1,86 +1,136 @@
 """
-mitm-ws-log.py - Addon do mitmproxy p/ capturar e decodificar WebSocket - Delfia.
+mitm-ws-log.py - Addon do mitmproxy p/ capturar HTTP + WebSocket - Delfia.
 
-Loga o handshake (URL + Cookie/Origin/Authorization) e cada frame WebSocket,
-decodificando Socket.IO/Engine.IO (CONNECT, EVENT, ACK, ping/pong...). Mostra
-de forma legivel o payload de auth do connect (40/ns,{...}) e os eventos.
+Loga as requisicoes/respostas HTTP (metodo, URL, headers e corpo JSON/texto) e
+cada frame WebSocket, decodificando Socket.IO/Engine.IO (CONNECT, EVENT, ACK...).
+Mostra o payload de auth do connect (40/ns,{...}), os eventos e o conteudo das
+chamadas REST - tudo em texto limpo, sem cacar no DevTools.
 
-USO (Windows):
-    mitmdump --listen-port 8881 -s mitm-ws-log.py
+USO (Windows) - so interceptando o host de interesse (recomendado):
+    mitmdump --listen-port 8881 --allow-hosts "cx\.netscout\.com" \
+             --set termlog_verbosity=warn -s mitm-ws-log.py
 
-Depois aponte o navegador p/ o proxy 127.0.0.1:8881 e instale o certificado
-abrindo http://mitm.it no navegador (necessario p/ decifrar wss://).
+O --allow-hosts faz o proxy interceptar APENAS esse host (o resto passa direto,
+sem ruido nem erro de certificado). O termlog_verbosity=warn silencia as linhas
+de "client connect / server connect" do proprio mitmproxy; o que voce ve no
+terminal e so a saida deste addon (que usa print, entao sempre aparece).
 
-Filtro opcional por host (so loga o que interessa):
-    mitmdump --listen-port 8881 -s mitm-ws-log.py --set wshost=cx.netscout.com
+Filtro extra opcional dentro do addon (caso nao use --allow-hosts):
+    --set caphost=cx.netscout.com
 """
-import logging
 
-log = logging.getLogger("ws")
+MAX_BODY = 4000  # corta corpos gigantes p/ nao inundar o terminal
+
+# Cabecalhos de request que mais importam (mostrados em destaque). O resto vem depois.
+KEY_REQ = ("cookie", "authorization", "origin", "user-agent", "content-type")
+
+
+def _is_text(headers):
+    ct = headers.get("content-type", "").lower()
+    if not ct:
+        return True
+    return any(x in ct for x in ("json", "text", "javascript", "xml", "urlencoded"))
+
+
+def _body(message):
+    """Retorna o corpo como texto (cortado) ou um resumo se for binario/vazio."""
+    raw = message.raw_content or b""
+    if not raw:
+        return None
+    ct = message.headers.get("content-type", "")
+    if _is_text(message.headers):
+        try:
+            text = message.get_text(strict=False)
+        except Exception:
+            text = raw.decode("utf-8", "replace")
+        if text is None:
+            return None
+        if len(text) > MAX_BODY:
+            return text[:MAX_BODY] + " ...[+%d chars]" % (len(text) - MAX_BODY)
+        return text
+    return "[%d bytes binarios, content-type: %s]" % (len(raw), ct)
 
 
 def _decode_socketio(text):
-    """Traduz um frame Engine.IO/Socket.IO p/ algo legivel. Retorna None se nao casar."""
+    """Traduz um frame Engine.IO/Socket.IO p/ algo legivel. None se nao casar."""
     if not text:
         return None
     eio = text[0]
-    if eio == "2":
-        return "Engine.IO ping"
-    if eio == "3":
-        return "Engine.IO pong"
+    simple = {"2": "Engine.IO ping", "3": "Engine.IO pong", "1": "Engine.IO CLOSE"}
+    if eio in simple:
+        return simple[eio]
     if eio == "0":
         return "Engine.IO OPEN " + text[1:]
-    if eio == "1":
-        return "Engine.IO CLOSE"
     if eio != "4":
-        return None  # nao e um pacote 'message' do Engine.IO
+        return None
     sio = text[1:]
     if not sio:
         return "Socket.IO (vazio)"
     types = {
-        "0": "CONNECT",
-        "1": "DISCONNECT",
-        "2": "EVENT",
-        "3": "ACK",
-        "4": "CONNECT_ERROR",
-        "5": "BINARY_EVENT",
-        "6": "BINARY_ACK",
+        "0": "CONNECT", "1": "DISCONNECT", "2": "EVENT", "3": "ACK",
+        "4": "CONNECT_ERROR", "5": "BINARY_EVENT", "6": "BINARY_ACK",
     }
-    label = types.get(sio[0], "?" + sio[0])
-    return "Socket.IO " + label + "  " + sio[1:]
+    return "Socket.IO " + types.get(sio[0], "?" + sio[0]) + "  " + sio[1:]
 
 
-class WsLog:
+class Capture:
     def __init__(self):
         self.host = None
 
     def load(self, loader):
         loader.add_option(
-            "wshost", str, "", "So loga WebSocket cujo host contenha esse texto."
+            "caphost", str, "",
+            "Filtra a saida do addon: so loga flows cujo host contenha esse texto.",
         )
 
     def configure(self, updated):
         from mitmproxy import ctx
-        self.host = ctx.options.wshost or None
+        self.host = ctx.options.caphost or None
 
     def _match(self, flow):
-        if not self.host:
-            return True
-        return self.host in flow.request.pretty_host
+        return not self.host or self.host in flow.request.pretty_host
 
-    # Handshake do WebSocket (a requisicao HTTP de upgrade)
+    # ---------- HTTP ----------
+    def request(self, flow):
+        if not self._match(flow):
+            return
+        r = flow.request
+        print("\n" + "-" * 72)
+        print("REQ  %s %s" % (r.method, r.pretty_url))
+        # primeiro os headers importantes, depois os demais
+        seen = set()
+        for h in KEY_REQ:
+            if h in r.headers:
+                print("   > %s: %s" % (h, r.headers[h]))
+                seen.add(h)
+        for k, v in r.headers.items():
+            if k.lower() not in seen:
+                print("   > %s: %s" % (k, v))
+        body = _body(r)
+        if body:
+            print("   REQ BODY: %s" % body)
+
+    def response(self, flow):
+        if not self._match(flow):
+            return
+        resp = flow.response
+        ct = resp.headers.get("content-type", "")
+        print("RESP %s  %s  (%s)" % (resp.status_code, flow.request.pretty_url, ct))
+        body = _body(resp)
+        if body:
+            print("   RESP BODY: %s" % body)
+
+    # ---------- WebSocket ----------
     def websocket_start(self, flow):
         if not self._match(flow):
             return
-        req = flow.request
-        log.info("=" * 70)
-        log.info("WS ABRIU  %s", req.pretty_url)
-        for h in ("cookie", "origin", "authorization", "user-agent"):
-            if h in req.headers:
-                log.info("   %-13s %s", h + ":", req.headers[h])
-        log.info("=" * 70)
+        print("\n" + "=" * 72)
+        print("WS ABRIU  %s" % flow.request.pretty_url)
+        for h in ("cookie", "origin", "authorization"):
+            if h in flow.request.headers:
+                print("   %s: %s" % (h, flow.request.headers[h]))
+        print("=" * 72)
 
-    # Cada mensagem (frame) trocada apos o handshake
     def websocket_message(self, flow):
         if not self._match(flow):
             return
@@ -90,14 +140,14 @@ class WsLog:
         except Exception:
             text = repr(m.content)
         arrow = "ENVIA  >>" if m.from_client else "<< RECEBE"
-        log.info("%s  %s", arrow, text)
+        print("%s  %s" % (arrow, text))
         decoded = _decode_socketio(text)
         if decoded and decoded != text:
-            log.info("            -> %s", decoded)
+            print("            -> %s" % decoded)
 
     def websocket_end(self, flow):
         if self._match(flow):
-            log.info("WS FECHOU  %s", flow.request.pretty_url)
+            print("WS FECHOU  %s" % flow.request.pretty_url)
 
 
-addons = [WsLog()]
+addons = [Capture()]
