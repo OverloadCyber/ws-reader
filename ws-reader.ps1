@@ -171,7 +171,14 @@ if ($Header) {
         if ($idx -lt 1) { Write-Line "ERRO" "Header invalido: $h (use 'Nome: valor')" Red; exit 1 }
         $name  = $h.Substring(0, $idx).Trim()
         $value = $h.Substring($idx + 1).Trim()
-        $ws.Options.SetRequestHeader($name, $value)
+        try {
+            $ws.Options.SetRequestHeader($name, $value)
+        } catch {
+            # Headers restritos (ex: User-Agent no PS 5.1/.NET Framework) nao podem
+            # ser setados aqui - avisa e segue em vez de abortar a conexao toda.
+            $first = ($_.Exception.Message -split "`n")[0].Trim()
+            Write-Line "AVISO" "Header '$name' ignorado: $first (use PowerShell 7 p/ User-Agent)" Yellow
+        }
     }
 }
 
