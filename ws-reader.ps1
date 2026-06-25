@@ -16,6 +16,10 @@
     quando o servidor envia o frame de OPEN (0{"sid":...}).
 .PARAMETER Namespace
     Namespace do Socket.IO (padrao "/"). Ex: -Namespace "/admin".
+.PARAMETER Auth
+    Payload de autenticacao (JSON) enviado no pacote de CONNECT do Socket.IO,
+    equivalente ao io(ns, { auth: {...} }) do navegador. Vai logo apos o namespace.
+    Ex: -Auth '{"token":"abc123"}'  ->  40/attendee_quiz,{"token":"abc123"}
 .PARAMETER OnConnect
     Mensagem(ns) a enviar automaticamente assim que conectar (replica as inscricoes
     que o navegador faz). Em Socket.IO sao enviadas apos o servidor confirmar o
@@ -39,6 +43,7 @@ param(
     [string]$SubProtocol,
     [switch]$SocketIO,
     [string]$Namespace = '/',
+    [string]$Auth,
     [string[]]$OnConnect,
     [switch]$Raw
 )
@@ -124,6 +129,7 @@ function Show-SocketIO {
             if ($script:Namespace -and $script:Namespace -ne '/') {
                 $connect = '40' + $script:Namespace + ','
             }
+            if ($script:Auth) { $connect += $script:Auth }   # payload de auth do CONNECT
             Send-WsText $connect
             Write-Line "> SIO" "connect ($connect)" Cyan
         }
