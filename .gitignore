@@ -1,5 +1,6 @@
 *
 !ws-reader.html
 !ws-reader.ps1
+!mitm-ws-log.py
 !README.md
 !.gitignore
