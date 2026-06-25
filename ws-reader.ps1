@@ -10,10 +10,20 @@
     Header(s) HTTP no handshake, formato "Nome: valor". Pode repetir. Ex: -Header "Authorization: Bearer xyz"
 .PARAMETER SubProtocol
     Subprotocolo opcional.
+.PARAMETER SocketIO
+    Forca o modo Socket.IO/Engine.IO (responde ping->pong, manda 40 p/ entrar no
+    namespace e decodifica os eventos 42[...]). Se omitido, e detectado automaticamente
+    quando o servidor envia o frame de OPEN (0{"sid":...}).
+.PARAMETER Namespace
+    Namespace do Socket.IO (padrao "/"). Ex: -Namespace "/admin".
+.PARAMETER Raw
+    Desliga o modo Socket.IO e mostra os frames crus, mesmo que sejam detectados.
 .EXAMPLE
     .\ws-reader.ps1 -Url wss://echo.websocket.org
 .EXAMPLE
     .\ws-reader.ps1 -Url wss://api.exemplo.com/socket -Header "Authorization: Bearer TOKEN"
+.EXAMPLE
+    .\ws-reader.ps1 -Url "wss://api.exemplo.com/socket.io/?EIO=4&transport=websocket" -Namespace "/admin"
 .NOTES
     Requer PowerShell 5.1+ (Windows) ou PowerShell 7+ (multiplataforma).
 #>
@@ -21,7 +31,10 @@
 param(
     [string]$Url,
     [string[]]$Header,
-    [string]$SubProtocol
+    [string]$SubProtocol,
+    [switch]$SocketIO,
+    [string]$Namespace = '/',
+    [switch]$Raw
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,6 +51,69 @@ function Format-MaybeJson {
     param([string]$Text)
     try   { return ($Text | ConvertFrom-Json | ConvertTo-Json -Depth 20) }
     catch { return $Text }
+}
+
+# Envia uma string de texto pelo socket (reaproveitado p/ input e p/ Socket.IO)
+function Send-WsText {
+    param([string]$Text)
+    $bytes = [Text.Encoding]::UTF8.GetBytes($Text)
+    $out   = [System.ArraySegment[byte]]::new($bytes)
+    $script:ws.SendAsync($out, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $script:cts.Token).GetAwaiter().GetResult()
+}
+
+# Decodifica o payload de um pacote Socket.IO (o que vem depois do '4' do Engine.IO)
+function Show-SIOMessage {
+    param([string]$Sio)
+    if ($Sio.Length -eq 0) { return }
+    $t    = $Sio[0]
+    $rest = $Sio.Substring(1)
+    switch ($t) {
+        '0' { Write-Line "< CONN" "namespace conectado $rest" Green }
+        '1' { Write-Line "< DISC" "namespace desconectado $rest" Yellow }
+        '2' {
+            # EVENT: [/namespace,][ackId]["nome", arg1, arg2, ...]
+            $br = $rest.IndexOf('[')
+            if ($br -lt 0) { Write-Line "< EVT" $rest Green; return }
+            $payload = $rest.Substring($br)
+            try {
+                $arr  = $payload | ConvertFrom-Json
+                $name = $arr[0]
+                $data = if ($arr.Count -gt 1) { ($arr[1..($arr.Count - 1)] | ConvertTo-Json -Depth 20 -Compress) } else { '' }
+                Write-Line "< EVT" ("{0}  {1}" -f $name, $data) Green
+            } catch {
+                Write-Line "< EVT" $payload Green
+            }
+        }
+        '3' { Write-Line "< ACK" $rest Green }
+        '4' { Write-Line "< ERR" (Format-MaybeJson $rest) Red }
+        default { Write-Line "< IN" (Format-MaybeJson $Sio) Green }
+    }
+}
+
+# Trata um frame de texto quando o modo Socket.IO/Engine.IO esta ativo
+function Show-SocketIO {
+    param([string]$Text)
+    if ($Text.Length -eq 0) { Write-Line "< IN" "(vazio)" Green; return }
+    $type = $Text[0]
+    switch ($type) {
+        '0' {
+            # Engine.IO OPEN — handshake
+            Write-Line "< OPEN" (Format-MaybeJson $Text.Substring(1)) DarkCyan
+            # Entra no namespace p/ comecar a receber eventos
+            $connect = if ($script:Namespace -and $script:Namespace -ne '/') { '40' + $script:Namespace + ',' } else { '40' }
+            Send-WsText $connect
+            Write-Line "> SIO" "connect ($connect)" Cyan
+        }
+        '1' { Write-Line "< CLOSE" "Engine.IO close" Yellow }
+        '2' {
+            # PING -> responde PONG p/ manter a conexao viva
+            Send-WsText '3'
+            Write-Line "<> PP" "ping -> pong" DarkGray
+        }
+        '3' { Write-Line "< PONG" "" DarkGray }
+        '4' { Show-SIOMessage $Text.Substring(1) }   # mensagem Socket.IO
+        default { Write-Line "< IN" (Format-MaybeJson $Text) Green }
+    }
 }
 
 # --- Banner ---
@@ -86,12 +162,14 @@ try {
     exit 1
 }
 Write-Line "SYS" "Conexao aberta. Digite e Enter p/ enviar. Ctrl+C p/ sair." Green
+if ($SocketIO) { Write-Line "SYS" "Modo Socket.IO ativo (namespace '$Namespace')." Yellow }
 Write-Host ""
 
 # --- Loop de recepção ---
 $buffer  = [byte[]]::new(8192)
 $segment = [System.ArraySegment[byte]]::new($buffer)
 $count   = 0
+$sioMode = [bool]$SocketIO   # pode ser ligado por auto-deteccao ao ver o frame de OPEN
 
 try {
     while ($ws.State -eq 'Open') {
@@ -103,9 +181,7 @@ try {
             if ([Console]::KeyAvailable) {
                 $msg = Read-Host
                 if ($null -ne $msg -and $msg -ne '') {
-                    $bytes = [Text.Encoding]::UTF8.GetBytes($msg)
-                    $out   = [System.ArraySegment[byte]]::new($bytes)
-                    $ws.SendAsync($out, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $cts.Token).GetAwaiter().GetResult()
+                    Send-WsText $msg
                     Write-Line "> OUT" $msg Cyan
                 }
             }
@@ -134,7 +210,18 @@ try {
             Write-Line "< BIN" "[$($data.Length) bytes] $hex" Green
         } else {
             $text = [Text.Encoding]::UTF8.GetString($ms.ToArray())
-            Write-Line "< IN" (Format-MaybeJson $text) Green
+
+            # Auto-deteccao: frame de OPEN do Engine.IO (0{"sid":...}) liga o modo Socket.IO
+            if (-not $sioMode -and -not $Raw -and $text -match '^0\{.*"sid"') {
+                $sioMode = $true
+                Write-Line "SYS" "Socket.IO/Engine.IO detectado — modo protocolo ativo." Yellow
+            }
+
+            if ($sioMode -and -not $Raw) {
+                Show-SocketIO $text
+            } else {
+                Write-Line "< IN" (Format-MaybeJson $text) Green
+            }
         }
         $ms.Dispose()
     }
