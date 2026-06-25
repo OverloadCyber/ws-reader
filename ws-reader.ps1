@@ -64,7 +64,7 @@ function Send-WsText {
     param([string]$Text)
     $bytes = [Text.Encoding]::UTF8.GetBytes($Text)
     $out   = [System.ArraySegment[byte]]::new($bytes)
-    $script:ws.SendAsync($out, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $script:cts.Token).GetAwaiter().GetResult()
+    [void]$script:ws.SendAsync($out, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $script:cts.Token).GetAwaiter().GetResult()
 }
 
 # Envia as mensagens de -OnConnect (uma unica vez)
@@ -179,7 +179,7 @@ $null = Register-EngineEvent -SourceIdentifier ([System.Management.Automation.Ps
 # --- Conecta ---
 Write-Line "SYS" "Conectando a $Url ..." Yellow
 try {
-    $ws.ConnectAsync([Uri]$Url, $cts.Token).GetAwaiter().GetResult()
+    [void]$ws.ConnectAsync([Uri]$Url, $cts.Token).GetAwaiter().GetResult()
 } catch {
     Write-Line "ERRO" $_.Exception.Message Red
     exit 1
@@ -262,7 +262,7 @@ catch {
 }
 finally {
     if ($ws.State -eq 'Open') {
-        try { $ws.CloseAsync('NormalClosure', 'fechado pelo cliente', [Threading.CancellationToken]::None).GetAwaiter().GetResult() } catch {}
+        try { [void]$ws.CloseAsync('NormalClosure', 'fechado pelo cliente', [Threading.CancellationToken]::None).GetAwaiter().GetResult() } catch {}
     }
     $ws.Dispose()
     Write-Host ""
