@@ -23,7 +23,33 @@ Gravar a captura num arquivo (p/ depois o Claude Code analisar):
 Depois rode o Claude Code na pasta e peca: "analise captura.log".
 """
 
+import os
+import re
+
 MAX_BODY = 4000  # corta corpos gigantes p/ nao inundar o terminal
+
+# Captura frases que terminam em '?' (perguntas), descartando query strings de URL.
+QUESTION_RE = re.compile(r"[^?\n]*\?")
+
+
+def find_questions(text):
+    """Extrai perguntas (frases terminadas em '?') de um texto qualquer."""
+    found = []
+    for m in QUESTION_RE.finditer(text):
+        cand = m.group()
+        # corta lixo de JSON/markup antes da frase (aspas, colchetes, etc.)
+        cand = re.split(r'["\[\]{}>:\\]', cand)[-1].strip()
+        if not cand.endswith("?"):
+            continue
+        if " " not in cand:            # query string (?EIO=4...) nao tem espaco
+            continue
+        before = cand[-2]              # caractere antes do '?'
+        if not (before.isalnum() or before in "\"')"):
+            continue
+        if len(cand) < 8:
+            continue
+        found.append(cand)
+    return found
 
 # Cabecalhos de request que mais importam (mostrados em destaque). O resto vem depois.
 KEY_REQ = ("cookie", "authorization", "origin", "user-agent", "content-type")
@@ -82,6 +108,9 @@ class Capture:
         self.host = None
         self.outfile = None
         self._fh = None
+        self.qdir = None
+        self._seen_q = set()
+        self._qseq = 0
 
     def load(self, loader):
         loader.add_option(
@@ -92,14 +121,34 @@ class Capture:
             "capfile", str, "",
             "Se setado, grava toda a captura nesse arquivo (p/ o Claude Code ler).",
         )
+        loader.add_option(
+            "qdir", str, "",
+            "Se setado, grava cada pergunta (frase com '?') como um .txt nessa pasta.",
+        )
 
     def configure(self, updated):
         from mitmproxy import ctx
         self.host = ctx.options.caphost or None
         self.outfile = ctx.options.capfile or None
+        self.qdir = ctx.options.qdir or None
         if self.outfile and self._fh is None:
             # append (a) p/ nao perder captura entre execucoes
             self._fh = open(self.outfile, "a", encoding="utf-8")
+        if self.qdir:
+            os.makedirs(self.qdir, exist_ok=True)
+
+    def _scan_questions(self, text):
+        if not self.qdir or not text:
+            return
+        for q in find_questions(text):
+            if q in self._seen_q:
+                continue
+            self._seen_q.add(q)
+            self._qseq += 1
+            self._out("PERGUNTA  %s" % q)
+            path = os.path.join(self.qdir, "q-%04d.txt" % self._qseq)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(q + "\n")
 
     def done(self):
         if self._fh:
@@ -135,6 +184,7 @@ class Capture:
         body = _body(r)
         if body:
             self._out("   REQ BODY: %s" % body)
+            self._scan_questions(body)
 
     def response(self, flow):
         if not self._match(flow):
@@ -145,6 +195,7 @@ class Capture:
         body = _body(resp)
         if body:
             self._out("   RESP BODY: %s" % body)
+            self._scan_questions(body)
 
     # ---------- WebSocket ----------
     def websocket_start(self, flow):
@@ -170,6 +221,7 @@ class Capture:
         decoded = _decode_socketio(text)
         if decoded and decoded != text:
             self._out("            -> %s" % decoded)
+        self._scan_questions(text)
 
     def websocket_end(self, flow):
         if self._match(flow):
